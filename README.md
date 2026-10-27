@@ -30,7 +30,7 @@ docker compose up --build -d
 
 Once the healthchecks are green:
 
-- Web UI (فارسی, RTL): <http://localhost:5173>
+- Web UI (Persian, RTL): <http://localhost:5173>
 - API: <http://localhost:8000> — health at <http://localhost:8000/healthz>
 
 If port 8000 is already taken on your machine, set `API_PORT` in `.env`
@@ -45,7 +45,7 @@ Demo users are seeded on the first start:
 | agent | `agent@example.com` | `agent123` |
 | customer | `customer@example.com` | `customer123` |
 
-The UI labels these roles as Persian strings (کارشناس / مشتری); the API and
+The UI labels these roles as Persian strings (`کارشناس` / `مشتری`); the API and
 the database always use `agent` / `customer`.
 
 `.env` is git-ignored on purpose. Only `.env.example` is committed, and it
