@@ -31,7 +31,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,6 +75,12 @@ services:
   web:
     build: ./web
     command: npm run dev -- --host 0.0.0.0 --port 5173
+    environment:
+      # The browser talks to the same origin it was served from (5173) and the
+      # dev server proxies to the api service over the compose network, so the
+      # host port of the API never matters to the UI.
+      VITE_API_BASE: ""
+      VITE_PROXY_TARGET: "http://api:8000"
     ports:
       - "5173:5173"
     depends_on:

@@ -33,6 +33,11 @@ Once the healthchecks are green:
 - Web UI (فارسی, RTL): <http://localhost:5173>
 - API: <http://localhost:8000> — health at <http://localhost:8000/healthz>
 
+If port 8000 is already taken on your machine, set `API_PORT` in `.env`
+(default `8000`) and the API is published on that port instead. The UI does
+not care: it calls same-origin `/api` and the Vite dev server proxies to
+`http://api:8000` over the compose network.
+
 Demo users are seeded on the first start:
 
 | role | email | password |
