@@ -61,6 +61,8 @@ os.environ.update(
         "ENGINE_PROVIDER": "laya",
         "LAYA_API_URL": f"http://127.0.0.1:{ENGINE_PORT}/predict",
         "LAYA_API_KEY": "",
+        "LAYA_UPSTREAM_URL": f"http://127.0.0.1:{ENGINE_PORT}/chat/completions",
+        "LAYA_UPSTREAM_KEY": "",
         "ENGINE_MIN_CONFIDENCE": "0.55",
         "ENGINE_TIMEOUT_SECONDS": "1",
     }

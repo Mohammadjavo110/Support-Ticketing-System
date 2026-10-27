@@ -1,8 +1,9 @@
 """laya-serve — typed decision engine called by the worker over POST /predict.
 
 Mode is chosen once from the environment at startup:
-  hosted — LAYA_API_URL is an https endpoint AND LAYA_API_KEY is set:
-           a thin adapter that forwards the typed questions upstream.
+  hosted — LAYA_UPSTREAM_URL is an https endpoint AND LAYA_UPSTREAM_KEY is
+           set: a thin adapter that forwards the typed questions upstream
+           (OpenAI-compatible /chat/completions or the legacy Laya contract).
   local  — otherwise: a deterministic Persian/English rules baseline.
 """
 
@@ -58,8 +59,8 @@ async def predict(body: PredictRequest):
         except hosted.UpstreamError as exc:
             latency_ms = int((time.perf_counter() - started) * 1000)
             log.warning(
-                "predict failed mode=hosted model=%s latency_ms=%d error=%s",
-                model, latency_ms, exc.code,
+                "predict failed mode=hosted model=%s latency_ms=%d error=%s detail=%s",
+                model, latency_ms, exc.code, str(exc)[:220],
             )
             return JSONResponse(
                 status_code=503,

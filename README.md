@@ -67,15 +67,24 @@ service). See `.env.example` for the full list.
 
 - `ENGINE_PROVIDER` — `laya` (HTTP to `laya-serve`), `rules` (in-process
   keyword rules) or `fake` (tests)
-- `LAYA_API_URL` — where to POST `{text, questions, model}`
-- `LAYA_API_KEY` — **optional**. When set, every request carries
-  `Authorization: Bearer <key>`, which is what allows a hosted (non-local)
-  model instead of the bundled container
+- `LAYA_API_URL` — where the **worker** POSTs `{text, questions, model}`;
+  inside compose this is the internal `http://laya-serve:8000/predict`
+- `LAYA_UPSTREAM_URL`, `LAYA_UPSTREAM_KEY` — where **`laya-serve`** sends the
+  typed questions in hosted mode (an external model API). Hosted activates
+  only when the URL starts with `https://` **and** the key is non-empty, so
+  an internal `http` URL can never create a request loop. A URL containing
+  `/chat/completions` is called as an OpenAI-compatible
+  `{model, messages}` endpoint; any other URL keeps the legacy
+  `{text, questions}` contract.
+- `LAYA_API_KEY` — **optional** bearer token the worker sends to `laya-serve`
+  itself; leave it empty behind the compose network
 - `LAYA_MODEL`, `ENGINE_MIN_CONFIDENCE` (0.55), `ENGINE_TIMEOUT_SECONDS` (8)
 
 **Drafting (stage 2 — generated text)**
 
-- `LLM_API_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_TIMEOUT_SECONDS`
+- `LLM_API_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_TIMEOUT_SECONDS` — any
+  OpenAI-compatible chat endpoint (e.g. Google Gemini's
+  `…/v1beta/openai/chat/completions`)
 - When `LLM_API_URL` or `LLM_API_KEY` is empty the draft is skipped:
   `draft_status='failed'`, while the stage-1 decision is still stored. The
   result is an honest "no suggestion", never fabricated text.
@@ -163,9 +172,12 @@ Two stages with a hard boundary between them:
 
 `laya-serve` runs in one of two modes, decided at startup:
 
-- **hosted** — `LAYA_API_URL` starts with `https://` **and** `LAYA_API_KEY` is
-  non-empty. The container is a thin adapter: it forwards the typed questions
-  with `Authorization: Bearer <key>` and normalises the upstream response. The
+- **hosted** — `LAYA_UPSTREAM_URL` starts with `https://` **and**
+  `LAYA_UPSTREAM_KEY` is non-empty. The container is a thin adapter: it
+  forwards the typed questions with `Authorization: Bearer <key>` and
+  normalises the upstream response. Two dialects are understood — an
+  OpenAI-compatible `/chat/completions` gateway (questions travel as a
+  strict-JSON instruction) and the legacy `{text, questions}` contract. The
   `https` requirement makes a self-referencing loop impossible.
 - **local** — everything else. A deterministic Persian/English keyword engine
   answers the same three questions. This is a baseline, not a transformer, and
@@ -177,7 +189,8 @@ Upstream failures return HTTP 503 with a machine-readable code
 healthcheck keeps passing when the model is down.
 
 No ticket text, draft text or API key is ever written to a log — only ids,
-statuses, durations and error classes.
+statuses, durations, error classes and a short upstream error reason
+(capped, whitespace-collapsed).
 
 ---
 
