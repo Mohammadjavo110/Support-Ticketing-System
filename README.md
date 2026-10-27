@@ -247,7 +247,45 @@ docker compose down -v            # purge: stop and delete the data volume
 
 ---
 
-## 10. Further reading
+## 10. Git workflow
+
+The repository follows a two-branch model:
+
+- **`main`** — the primary branch. It only ever receives a merge from `dev`,
+  one merge per release. Every commit reachable from `main` is therefore
+  tested code.
+- **`dev`** — the development branch. Every feature, fix, test and docs change
+  lands here, always through its own branch and always with a `--no-ff` merge
+  so the branch point stays visible in the history.
+
+Branch naming and where each one merges:
+
+| branch | kind | merges into |
+| --- | --- | --- |
+| `feat/*` | new capability | `dev` |
+| `fix/*` | bug fix | `dev` |
+| `test/*` | test coverage | `dev` |
+| `docs/*` | documentation | `dev` |
+| `chore/*` | tooling, scripts | `dev` |
+
+Typical cycle:
+
+```bash
+git checkout dev
+git checkout -b feat/thing        # 1. branch off dev
+# ... commit your work ...
+git checkout dev                  # 2. integrate into dev
+git merge --no-ff feat/thing
+git checkout main                 # 3. release
+git merge --no-ff dev
+```
+
+Nothing is pushed from a feature branch: `dev` is the only integration point,
+and `main` is the only thing that leaves the machine as a release.
+
+---
+
+## 11. Further reading
 
 - `docs/architecture.md` — the architecture decision record (why `laya-serve`
   is its own container, ownership rules, failure modes).
