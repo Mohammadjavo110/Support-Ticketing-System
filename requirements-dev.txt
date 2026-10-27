@@ -1,0 +1,5 @@
+# Development / CI dependencies: the application plus the test runner.
+# The tests need no PostgreSQL, Redis, engine or LLM — see tests/conftest.py.
+-r api/requirements.txt
+pytest==8.3.5
+aiosqlite==0.20.0
