@@ -109,7 +109,17 @@ class InboxItem(BaseModel):
     needs_manual_triage: bool
     created_at: datetime
     waiting_hours: float
+    # Who the ticket belongs to — the agent inbox shows it; the UI falls back
+    # to "نامعلوم" when it is missing.
+    customer_name: Optional[str] = None
     suggestion: Optional[SuggestionOut] = None
+
+
+class StatusPatchIn(BaseModel):
+    # `answered` is deliberately absent: it is written only by the decision
+    # endpoint, which creates the outbound message together with the status.
+    # This endpoint handles the agent-driven moves (start review, close).
+    status: Literal["in_progress", "closed"]
 
 
 class DecisionIn(BaseModel):

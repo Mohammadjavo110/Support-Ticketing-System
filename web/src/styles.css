@@ -813,6 +813,16 @@ fieldset.field {
   margin-top: 10px;
 }
 
+.suggest__stale {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--warn);
+  background: var(--warn-bg);
+  border: 1px dashed var(--warn-border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+
 .suggest__actions {
   display: flex;
   gap: 8px;
@@ -824,6 +834,21 @@ fieldset.field {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* ---------- agent status actions ---------- */
+.status-actions__title {
+  font-size: 16px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.status-actions__buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 10px;
 }
 
 /* ---------- responsive ---------- */

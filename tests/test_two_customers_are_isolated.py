@@ -93,3 +93,8 @@ def test_two_customers_are_isolated(client):
     inbox_ids = {item["id"] for item in client.get("/api/inbox").json()}
     assert alice_ticket["id"] in inbox_ids
     assert bob_ticket["id"] in inbox_ids
+
+    # The agent inbox names each ticket's owner (the UI needs it).
+    inbox_rows = {item["id"]: item for item in client.get("/api/inbox").json()}
+    assert inbox_rows[alice_ticket["id"]]["customer_name"] == "Alice"
+    assert inbox_rows[bob_ticket["id"]]["customer_name"] == "Bob"

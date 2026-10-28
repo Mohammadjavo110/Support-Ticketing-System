@@ -131,7 +131,7 @@ service). See `.env.example` for the full list.
    `{"ticket_id": ...}` onto the Redis list `triage:queue`. If Redis is down,
    the ticket still exists; the queued row is the source of truth.
 2. The worker pops the job (`BRPOP`), marks the run `running` and reads the
-   ticket body.
+   whole thread — subject, original body and every message so far.
 3. **Stage 1 — decisions.** The engine answers three typed questions:
    `category` (choice), `priority` (score 1–3) and `needs_review` (noul). The
    worker calls `laya-serve` over HTTP (`/predict`), which is either a hosted
@@ -141,10 +141,14 @@ service). See `.env.example` for the full list.
    guessing, and keeps the original confidence values.
 5. The decision is upserted into `ai_suggestions` — exactly one row per ticket,
    never a second insert.
-6. **Stage 2 — the draft.** The drafter asks the LLM for a reply. The ticket
-   text is declared untrusted data in the system prompt (prompt-injection
-   defence), and a policy gate refuses drafts containing URLs or 16-digit
-   numbers, which turns them into `draft_status='failed'`.
+6. **Stage 2 — the draft.** The drafter asks the LLM for a reply to the
+   customer's newest message, drafted from the whole thread plus the
+   customer's earlier tickets (bounded history: up to 5 recent tickets,
+   ~300 chars each, so the reply can reference a prior refund or apologise
+   for a repeat problem). The conversation and history text are declared
+   untrusted data in the system prompt (prompt-injection defence), and a
+   policy gate refuses drafts containing URLs or 16-digit numbers, which
+   turns them into `draft_status='failed'`.
 7. The run finishes as `succeeded` (draft ready), `succeeded_no_draft` (decision
    only) or `failed`, with `latency_ms` and `last_error` recorded.
 8. The agent opens `GET /api/inbox`, sorted by manual-triage flag, then
@@ -158,6 +162,38 @@ service). See `.env.example` for the full list.
    - `rejected` → only the event; no message, status unchanged.
 10. The customer sees the answer in the thread. Closed tickets are never
     reopened; a customer opens a new ticket instead.
+11. **A new customer message invalidates the old suggestion.** `POST
+    /api/tickets/{id}/messages` commits the message together with a fresh
+    `queued` `ai_runs` row (and reopens an `answered` ticket to `in_progress`),
+    then pushes the ticket onto `triage:queue` again. The worker drops the
+    previous ready draft (`draft_status='pending'`) and rebuilds decision and
+    draft from the whole thread, so the agent only ever sees a suggestion that
+    matches the customer's latest message.
+
+### Ticket statuses
+
+The schema allows four statuses — `open`, `in_progress`, `answered`, `closed` —
+and transitions follow one explicit state machine (`STATUS_TRANSITIONS` in
+`api/app/main.py`); anything else is a **409**, so an inconsistent status can
+never be written:
+
+- `open → in_progress` — the agent starts reviewing
+  (`PATCH /api/tickets/{id}/status`, agent only).
+- `open|in_progress → answered` — **only** by accepting or editing a
+  suggestion; the decision endpoint writes the status and the outbound message
+  together, so `answered` always means "a reply went out".
+- `answered → in_progress` — the ticket reopens when the customer sends a new
+  message (written by `add_message` together with the message), or manually via
+  `PATCH /api/tickets/{id}/status`; the previous suggestion stops being offered
+  either way.
+- `in_progress|answered → closed` — the agent closes the ticket
+  (`PATCH /api/tickets/{id}/status`).
+- `closed` is terminal: no transition leaves it, accepting a suggestion on a
+  closed ticket is a 409, and a customer reply to a closed ticket is refused
+  (they open a new ticket instead).
+
+The `PATCH` endpoint deliberately has no `answered` target, so the "answered ⇒
+a message exists" invariant has exactly one writer.
 
 ---
 
@@ -218,6 +254,13 @@ python -m venv .venv
 - `tests/test_suggestion_accept_reject.py` — accept creates the outbound
   message, reject only records the decision, a failed draft cannot be accepted
   (409), an edit without text is rejected (422).
+- `tests/test_ticket_status_transitions.py` — the status state machine: legal
+  moves succeed, illegal moves and anything out of `closed` are 409, a customer
+  can never change a status.
+- `tests/test_customer_reply_retriage.py` — a customer message re-queues a
+  triage run and reopens an `answered` ticket; an agent message queues nothing
+  and changes no status; `closed` still refuses customer replies with 409 and
+  no job.
 
 The test suite is deliberately excluded from the runtime images (see
 `api/.dockerignore`) so they stay slim — run it on the host, as above.
@@ -239,6 +282,11 @@ The test suite is deliberately excluded from the runtime images (see
   it, so a worker crash mid-job loses the message; the ticket and its `queued`
   `ai_runs` row remain and can be re-queued manually. Retries inside a running
   worker are handled (3 attempts, exponential backoff).
+- **The worker itself has no unit test.** The pytest suite runs the API with no
+  Postgres/Redis/LLM, so worker behaviour (whole-thread drafting, stale-draft
+  invalidation) is pinned through its contract — the `ai_runs` rows and queue
+  pushes the API commits — and by `scripts/smoke.py` / `scripts/e2e_persian.py`
+  against the running stack.
 - **Single-node by design.** One PostgreSQL, one Redis, no horizontal scaling,
   no cloud deployment, no Kubernetes.
 - **Session cookies are not rotated** and there is no rate limiting on login.
