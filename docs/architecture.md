@@ -135,6 +135,11 @@ Stage 2 is the suggested reply. Laya cannot produce it.
   (Google `gemini-3.5-flash-lite` in this deployment), optional by
   configuration: with `LLM_API_URL`/`LLM_API_KEY` empty the draft is simply
   skipped and `draft_status='failed'` — the decision still stands.
+- **Context:** the current ticket's thread **plus the customer's earlier
+  tickets** (read-only `tickets` query scoped to the same `customer_id`,
+  bounded: up to 5 most recent, ~300 chars of body each, ~2k chars total) —
+  so the reply can reference a prior refund, escalation, or repeat problem.
+  The stage-1 decision remains scoped to the current thread only.
 - **Why not the same model:** the hard boundary — the decider must emit typed,
   validated, confidence-scored values that are reproducible and testable; the
   drafter emits prose that is plausible by nature. One model doing both would

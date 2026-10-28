@@ -142,10 +142,13 @@ service). See `.env.example` for the full list.
 5. The decision is upserted into `ai_suggestions` — exactly one row per ticket,
    never a second insert.
 6. **Stage 2 — the draft.** The drafter asks the LLM for a reply to the
-   customer's newest message, drafted from the whole thread. The conversation
-   text is declared untrusted data in the system prompt (prompt-injection
-   defence), and a policy gate refuses drafts containing URLs or 16-digit
-   numbers, which turns them into `draft_status='failed'`.
+   customer's newest message, drafted from the whole thread plus the
+   customer's earlier tickets (bounded history: up to 5 recent tickets,
+   ~300 chars each, so the reply can reference a prior refund or apologise
+   for a repeat problem). The conversation and history text are declared
+   untrusted data in the system prompt (prompt-injection defence), and a
+   policy gate refuses drafts containing URLs or 16-digit numbers, which
+   turns them into `draft_status='failed'`.
 7. The run finishes as `succeeded` (draft ready), `succeeded_no_draft` (decision
    only) or `failed`, with `latency_ms` and `last_error` recorded.
 8. The agent opens `GET /api/inbox`, sorted by manual-triage flag, then
