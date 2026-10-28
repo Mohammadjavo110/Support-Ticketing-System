@@ -37,7 +37,26 @@ values ($1, 'running', $2, now())
 returning id
 """
 
-READ_TICKET = "select body from tickets where id = $1"
+READ_TICKET = "select subject, body from tickets where id = $1"
+
+# The engine and the drafter work on the whole conversation, not just the
+# original body, so a follow-up customer message gets a matching draft.
+READ_MESSAGES = """
+select direction, body, created_at from messages
+  where ticket_id = $1
+  order by created_at asc, id asc
+"""
+
+READ_EXISTING = "select draft_status, updated_at from ai_suggestions where ticket_id = $1"
+
+# A ready draft that predates the customer's newest message must stop being
+# offered the moment the follow-up run starts; it is regenerated below.
+INVALIDATE_DRAFT = """
+update ai_suggestions
+   set draft_text = null, draft_status = 'pending'
+ where ticket_id = $1
+   and draft_status = 'ready'
+"""
 
 RECORD_ERROR = "update ai_runs set last_error = $2 where id = $1"
 
@@ -100,6 +119,19 @@ def _ms(since: float) -> int:
     return int((time.monotonic() - since) * 1000)
 
 
+def _thread_text(subject: str, body: str, messages: list[asyncpg.Record]) -> str:
+    """Flatten the ticket into one text: subject, original body, every message.
+
+    The customer's newest message comes last, which is what the drafter must
+    answer; agent messages are included as context only.
+    """
+    parts = [f"Ticket subject: {subject}", body]
+    for record in messages:
+        who = "Customer" if record["direction"] == "in" else "Support agent"
+        parts.append(f"{who}: {record['body']}")
+    return "\n\n".join(parts)
+
+
 async def _mark_running(pool: asyncpg.Pool, ticket_id: str, attempt: int) -> str | None:
     row = await pool.fetchrow(MARK_RUNNING, ticket_id, attempt)
     if row is not None:
@@ -140,7 +172,36 @@ async def process_ticket(ticket_id: str, ctx: dict[str, Any]) -> JobResult:
         if row is None:
             logger.warning("run aborted reason=ticket_missing ticket_id=%s", ticket_id)
             return JobResult("missing")
-        text = row["body"]
+        messages = await pool.fetch(READ_MESSAGES, ticket_id)
+        text = _thread_text(row["subject"], row["body"], messages)
+
+        # Ascending order: the last `in` record is the customer's newest
+        # message — the one a suggestion must postdate to stay valid.
+        last_inbound: Any = None
+        for record in messages:
+            if record["direction"] == "in":
+                last_inbound = record["created_at"]
+
+        existing = await pool.fetchrow(READ_EXISTING, ticket_id)
+        # Reuse a ready draft only while no customer message is newer than it.
+        # Everything else (no row, pending/failed draft, stale ready draft) is
+        # regenerated from the full thread below.
+        draft_is_current = bool(
+            existing is not None
+            and existing["draft_status"] == "ready"
+            and (last_inbound is None or last_inbound <= existing["updated_at"])
+        )
+        if (
+            existing is not None
+            and existing["draft_status"] == "ready"
+            and not draft_is_current
+        ):
+            # Drop the stale draft before the (slow) model calls, so the UI
+            # stops offering the previous suggestion right away.
+            await pool.execute(INVALIDATE_DRAFT, ticket_id)
+            logger.info(
+                "stale draft invalidated ticket_id=%s run_id=%s", ticket_id, run_id
+            )
 
         engine = build_engine(settings, ctx.get("http"))
         engine_error: str | None = None
@@ -158,7 +219,9 @@ async def process_ticket(ticket_id: str, ctx: dict[str, Any]) -> JobResult:
 
         decision = apply_confidence(decision, settings.engine_min_confidence)
 
-        suggestion = await pool.fetchrow(
+        # The upsert refreshes the decision fields (and updated_at); draft
+        # fields are only touched by INVALIDATE_DRAFT / UPDATE_DRAFT.
+        await pool.execute(
             UPSERT_SUGGESTION,
             ticket_id,
             decision.category,
@@ -186,8 +249,9 @@ async def process_ticket(ticket_id: str, ctx: dict[str, Any]) -> JobResult:
                 error_class="EngineUnavailable",
             )
 
-        if suggestion is not None and suggestion["draft_status"] == "ready":
-            # Idempotency: a ready draft already exists, never call the LLM twice.
+        if draft_is_current:
+            # Idempotency: a current ready draft already exists (no newer
+            # customer message), never call the LLM twice.
             await pool.execute(FINISH_RUN, run_id, "succeeded", engine.model_name)
             logger.info(
                 "run finished status=succeeded idempotent=true ticket_id=%s run_id=%s duration_ms=%d",

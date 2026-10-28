@@ -1,9 +1,10 @@
 """FastAPI application: auth, tickets, inbox and suggestion decisions.
 
-Writer ownership: this service owns users, sessions, tickets and messages, plus
-the initial ai_runs row created on ticket creation. It never writes
-ai_suggestions and only changes ticket.status through the status state machine
-(decision endpoint and PATCH /api/tickets/{id}/status).
+Writer ownership: this service owns users, sessions, tickets and messages, the
+ai_runs rows created on ticket creation and on each new customer message, plus
+suggestion_events. It never writes ai_suggestions and only changes
+ticket.status through the status state machine (decision endpoint,
+PATCH /api/tickets/{id}/status and the reopen on a customer reply).
 """
 
 import json
@@ -40,11 +41,13 @@ TRIAGE_QUEUE_KEY = "triage:queue"
 # The ticket status state machine (documented in README, "Ticket statuses").
 # `closed` is terminal — nothing ever leaves it; a customer opens a new ticket
 # instead. `answered` is reached only by accepting/editing a suggestion (the
-# decision endpoint), so it is not a target of the PATCH endpoint.
+# decision endpoint), so it is not a target of the PATCH endpoint. A new
+# customer message reopens `answered -> in_progress` (see add_message): the
+# previous suggestion is consumed and the follow-up needs a fresh triage run.
 STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
     "open": frozenset({"in_progress", "answered"}),
     "in_progress": frozenset({"answered", "closed"}),
-    "answered": frozenset({"closed"}),
+    "answered": frozenset({"in_progress", "closed"}),
     "closed": frozenset(),
 }
 
@@ -268,9 +271,37 @@ async def add_message(
         body=payload.body,
     )
     db.add(message)
+
+    # A *customer* message invalidates the previous suggestion: an `answered`
+    # ticket reopens (answered -> in_progress, a legal move in
+    # STATUS_TRANSITIONS) and a fresh triage run is committed together with the
+    # message, so the worker rebuilds the decision and the draft from the whole
+    # thread. Agent messages (direction "out") change neither status nor queue.
+    retriage = direction == "in"
+    if retriage:
+        if ticket.status == "answered":
+            ticket.status = "in_progress"
+        db.add(AiRun(ticket_id=ticket.id, status="queued"))
+
     await db.commit()
     await db.refresh(message)
-    log.info("message added ticket_id=%s direction=%s", ticket.id, direction)
+
+    if retriage:
+        # Same contract as create_ticket: the committed `queued` ai_runs row is
+        # the source of truth; a Redis outage only delays the run.
+        try:
+            await redis_client.lpush(
+                TRIAGE_QUEUE_KEY, json.dumps({"ticket_id": str(ticket.id)})
+            )
+        except Exception:
+            log.error("enqueue failed ticket_id=%s", ticket.id, exc_info=True)
+
+    log.info(
+        "message added ticket_id=%s direction=%s retriage=%s",
+        ticket.id,
+        direction,
+        retriage,
+    )
     return schemas.MessageOut.model_validate(message)
 
 
@@ -284,10 +315,10 @@ async def set_ticket_status(
     """Move a ticket along the status state machine (agent only).
 
     Allowed moves come from STATUS_TRANSITIONS: open -> in_progress (start
-    review), in_progress -> closed (reviewed, nothing to send). `answered` is
-    not a target here — it is written only by the decision endpoint, which
-    creates the outbound message together with the status. `closed` is
-    terminal: any move out of it is a 409.
+    review), answered -> in_progress (reopen), in_progress|answered -> closed.
+    `answered` is not a target here — it is written only by the decision
+    endpoint, which creates the outbound message together with the status.
+    `closed` is terminal: any move out of it is a 409.
     """
     require_agent(user)
     ticket = await db.get(Ticket, ticket_id)

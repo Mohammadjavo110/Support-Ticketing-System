@@ -8,8 +8,8 @@
 | Container | Owns (writes) | Reads from | Must never |
 |---|---|---|---|
 | `web` | — (stateless SPA) | `api` over HTTP (`/api`, proxied inside the container) | hold an API key, or enforce a business rule |
-| `api` | `users`, `sessions`, `tickets`, `messages`, the first `ai_runs` row, `suggestion_events` | Postgres; Redis (`LPUSH triage:queue`); `ai_suggestions` (read-only) | call a model, or write `ai_suggestions` |
-| `worker` | `ai_suggestions`, the later `ai_runs` updates | Postgres (`tickets` read-only), Redis (`BRPOP`), `laya-serve` `/predict`, the LLM over HTTPS | accept user HTTP traffic, or write `tickets`/`messages` |
+| `api` | `users`, `sessions`, `tickets`, `messages`, the `ai_runs` `queued` rows (creation + customer follow-up), `suggestion_events` | Postgres; Redis (`LPUSH triage:queue`); `ai_suggestions` (read-only) | call a model, or write `ai_suggestions` |
+| `worker` | `ai_suggestions`, the later `ai_runs` updates | Postgres (`tickets`/`messages` read-only), Redis (`BRPOP`), `laya-serve` `/predict`, the LLM over HTTPS | accept user HTTP traffic, or write `tickets`/`messages` |
 | `laya-serve` | — (stateless, no database) | a hosted model upstream, or its own local rules | touch Postgres/Redis, or generate ticket text |
 
 Shared infrastructure: `postgres` (durable data), `redis` (job queue).
@@ -27,13 +27,19 @@ One writer per table — a table's owner is the only service that ever issues an
    Redis is down the error is logged and swallowed: the database is the source
    of truth and the `queued` row is the job record. The response is 201 with the
    ticket (`id`, `status='open'`) — never any AI output.
-4. The worker `BRPOP`s the job, marks the run `running`, reads the body, runs
-   stage 1 (typed decision) and stage 2 (draft), upserts the single
-   `ai_suggestions` row and finishes the run as `succeeded` /
-   `succeeded_no_draft`.
+4. The worker `BRPOP`s the job, marks the run `running`, reads the whole
+   thread (subject, body, every message), runs stage 1 (typed decision) and
+   stage 2 (draft), upserts the single `ai_suggestions` row and finishes the
+   run as `succeeded` / `succeeded_no_draft`.
 5. When the model fails, the worker stores the abstained decision (see §4),
    records `ai_runs.last_error`, retries with backoff and finally marks the run
    `failed` — the ticket itself was already created and stays readable.
+6. A customer follow-up (`POST /tickets/{id}/messages`) follows the same queue
+   contract: the message and a fresh `queued` `ai_runs` row commit together,
+   `LPUSH` happens after the commit, and an `answered` ticket reopens to
+   `in_progress`. The worker then invalidates the previous ready draft and
+   regenerates both stages from the thread, so a suggestion never outlives the
+   customer message it answered.
 
 ## 3. Decision D1 — Why this service split
 
@@ -166,5 +172,6 @@ Stage 2 is the suggested reply. Laya cannot produce it.
   upstream error reason.
 - Only the API changes `tickets.status`, and only through the state machine
   `STATUS_TRANSITIONS` (`api/app/main.py`): `open → in_progress → answered →
-  closed`, plus `open → answered` via accept/edit; `closed` is terminal and
-  every other move is a 409.
+  closed`, plus `open|in_progress → answered` via accept/edit and
+  `answered → in_progress` when a customer replies (also reachable manually
+  through `PATCH`); `closed` is terminal and every other move is a 409.

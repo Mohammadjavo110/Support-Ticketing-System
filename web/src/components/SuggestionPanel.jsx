@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   api,
   categoryLabel,
@@ -15,7 +15,7 @@ const DECISION_MESSAGES = {
   rejected: 'پیشنهاد رد شد و رویداد آن ثبت گردید.',
 };
 
-export default function SuggestionPanel({ ticketId, onChanged }) {
+export default function SuggestionPanel({ ticketId, status, lastInboundAt, onChanged }) {
   const [suggestion, setSuggestion] = useState(null);
   const [hasRow, setHasRow] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -25,9 +25,10 @@ export default function SuggestionPanel({ ticketId, onChanged }) {
   const [mode, setMode] = useState('view');
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
+  const bootedRef = useRef(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     setError('');
     try {
       const data = await api.getSuggestion(ticketId);
@@ -44,17 +45,38 @@ export default function SuggestionPanel({ ticketId, onChanged }) {
         setError(err.message);
       }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [ticketId]);
 
+  // First paint shows the spinner; later reloads (a new customer message or a
+  // status change) are silent so the panel does not flash while the agent reads.
   useEffect(() => {
-    load();
-  }, [load]);
+    if (!bootedRef.current) {
+      bootedRef.current = true;
+      load();
+      return;
+    }
+    // Never refetch under the editor while the agent is typing.
+    if (mode === 'edit') return;
+    load({ silent: true });
+  }, [load, status, lastInboundAt, mode]);
 
   const draftText = suggestion && suggestion.draft_text ? String(suggestion.draft_text).trim() : '';
   const draftStatus = suggestion ? suggestion.draft_status : null;
   const hasDraft = Boolean(draftText);
+
+  // Consumed: the ticket already has its answer (answered) or is closed — the
+  // previous suggestion must not be offered again.
+  const consumed = status === 'answered' || status === 'closed';
+  // Stale: a customer message arrived after the suggestion was written — a
+  // fresh one is queued with the triage re-run.
+  const stale = Boolean(
+    suggestion &&
+      suggestion.updated_at &&
+      lastInboundAt != null &&
+      Date.parse(suggestion.updated_at) < lastInboundAt
+  );
 
   // Reset the inline editor whenever a fresh suggestion arrives.
   useEffect(() => {
@@ -110,6 +132,24 @@ export default function SuggestionPanel({ ticketId, onChanged }) {
   if (!hasRow) {
     draftBlock = <p className="suggest__none">پیشنهادی موجود نیست</p>;
     note = 'برای این تیکت هنوز پیشنهادی ثبت نشده است؛ می‌توانید با «ویرایش» پاسخ خودتان را بنویسید.';
+  } else if (consumed) {
+    draftBlock = hasDraft ? (
+      <p className="suggest__draft">{draftText}</p>
+    ) : (
+      <p className="suggest__none">پیشنهادی موجود نیست</p>
+    );
+    note =
+      status === 'answered'
+        ? 'به این تیکت پاسخ داده شد و پیشنهاد قبلی مصرف شد؛ تا پیام جدید مشتری، پیشنهاد تازه‌ای ساخته نمی‌شود.'
+        : 'این تیکت بسته شده و پیشنهاد قبلی دیگر قابل استفاده نیست.';
+  } else if (stale) {
+    draftBlock = (
+      <p className="suggest__stale">
+        پیام جدید مشتری دریافت شد؛ پیشنهاد قبلی متناسب با پیام قبل است و پیشنهاد
+        تازه‌ای متناسب با آخرین پیام در حال آماده‌سازی است…
+      </p>
+    );
+    note = 'برای دیدن پیشنهاد تازه چند لحظه بعد «به‌روزرسانی» را بزنید.';
   } else if (draftStatus === 'failed') {
     draftBlock = <p className="suggest__none">پیشنهادی موجود نیست</p>;
     note = 'پیشنهاد هوشمند متن پیش‌نویس نساخت (خطای مدل)؛ با «ویرایش» متن پاسخ را خودتان بنویسید یا پیشنهاد را رد کنید.';
@@ -139,7 +179,15 @@ export default function SuggestionPanel({ ticketId, onChanged }) {
       {draftBlock}
       {note ? <p className="suggest__note">{note}</p> : null}
 
-      {mode === 'edit' ? (
+      {consumed || stale ? (
+        // No decision while the suggestion is consumed or stale: accepting the
+        // old text would answer a question the customer has moved past from.
+        <p className="muted">
+          {status === 'closed'
+            ? 'این تیکت بسته است؛ پذیرش، ویرایش و ردِ پیشنهاد در دسترس نیست.'
+            : 'پذیرش، ویرایش و ردِ این پیشنهاد غیرفعال است؛ با پیام جدید مشتری، پیشنهاد تازه‌ای ارائه می‌شود.'}
+        </p>
+      ) : mode === 'edit' ? (
         <div className="suggest__editor">
           <label htmlFor="suggest-edit">متن پاسخ</label>
           <textarea

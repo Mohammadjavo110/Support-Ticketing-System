@@ -813,6 +813,16 @@ fieldset.field {
   margin-top: 10px;
 }
 
+.suggest__stale {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--warn);
+  background: var(--warn-bg);
+  border: 1px dashed var(--warn-border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+
 .suggest__actions {
   display: flex;
   gap: 8px;

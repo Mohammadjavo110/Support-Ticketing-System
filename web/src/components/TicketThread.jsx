@@ -110,6 +110,15 @@ export default function TicketThread({ ticketId, role, onBack }) {
   const showTicketBody = Boolean(ticket && ticket.body) &&
     (!firstMessage || firstMessage.body !== ticket.body);
 
+  // Newest customer message as epoch ms (null = none yet). The suggestion
+  // panel compares it with the suggestion's updated_at to spot a stale draft.
+  const lastInboundAt = messages.reduce((latest, message) => {
+    if (!message || message.direction !== 'in') return latest;
+    const at = Date.parse(message.created_at || '');
+    if (Number.isNaN(at)) return latest;
+    return latest === null || at > latest ? at : latest;
+  }, null);
+
   return (
     <section className="page" aria-labelledby="thread-title">
       <div className="thread-head">
@@ -185,7 +194,8 @@ export default function TicketThread({ ticketId, role, onBack }) {
               </h3>
               <p className="muted">
                 جابه‌جایی وضعیت فقط مطابق قواعد است: باز ← در حال بررسی ← پاسخ داده شد ← بسته.
-                پس از «پاسخ داده شد» فقط بستن مجاز است و تیکت بسته‌شده هرگز باز نمی‌شود.
+                با پیام جدید مشتری، تیکتِ «پاسخ داده شد» خودبه‌خود دوباره به «در حال بررسی»
+                برمی‌گردد و پیشنهاد تازه‌ای ساخته می‌شود؛ تیکت بسته‌شده هرگز باز نمی‌شود.
               </p>
               <div className="status-actions__buttons">
                 {ticket.status === 'open' ? (
@@ -196,6 +206,16 @@ export default function TicketThread({ ticketId, role, onBack }) {
                     onClick={() => changeStatus('in_progress')}
                   >
                     {statusBusy ? 'در حال ثبت…' : 'شروع بررسی'}
+                  </button>
+                ) : null}
+                {ticket.status === 'answered' ? (
+                  <button
+                    type="button"
+                    className="btn btn--sm"
+                    disabled={statusBusy}
+                    onClick={() => changeStatus('in_progress')}
+                  >
+                    {statusBusy ? 'در حال ثبت…' : 'بازگشایی تیکت'}
                   </button>
                 ) : null}
                 {ticket.status === 'in_progress' || ticket.status === 'answered' ? (
@@ -250,7 +270,12 @@ export default function TicketThread({ ticketId, role, onBack }) {
           )}
 
           {role === 'agent' ? (
-            <SuggestionPanel ticketId={ticketId} onChanged={() => load({ silent: true })} />
+            <SuggestionPanel
+              ticketId={ticketId}
+              status={ticket.status}
+              lastInboundAt={lastInboundAt}
+              onChanged={() => load({ silent: true })}
+            />
           ) : null}
         </>
       )}
