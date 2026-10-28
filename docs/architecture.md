@@ -164,4 +164,7 @@ Stage 2 is the suggested reply. Laya cannot produce it.
 - Ticket and message text is data, never an instruction, and never reaches a
   log: logs carry ids, statuses, durations, error classes and one capped
   upstream error reason.
-- Only `POST /api/suggestions/{id}/decision` changes `tickets.status`.
+- Only the API changes `tickets.status`, and only through the state machine
+  `STATUS_TRANSITIONS` (`api/app/main.py`): `open → in_progress → answered →
+  closed`, plus `open → answered` via accept/edit; `closed` is terminal and
+  every other move is a 409.

@@ -826,6 +826,21 @@ fieldset.field {
   gap: 10px;
 }
 
+/* ---------- agent status actions ---------- */
+.status-actions__title {
+  font-size: 16px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.status-actions__buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 10px;
+}
+
 /* ---------- responsive ---------- */
 @media (max-width: 860px) {
   .split {

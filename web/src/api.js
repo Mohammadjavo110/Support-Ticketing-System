@@ -129,6 +129,11 @@ export const api = {
     request(`/api/tickets/${encodeURIComponent(id)}/messages`, { method: 'POST', body: { body } }),
 
   inbox: () => request('/api/inbox'),
+  updateStatus: (id, status) =>
+    request(`/api/tickets/${encodeURIComponent(id)}/status`, {
+      method: 'PATCH',
+      body: { status },
+    }),
   getSuggestion: (ticketId) => request(`/api/suggestions/${encodeURIComponent(ticketId)}`),
   decide: (ticketId, decision, text) =>
     request(`/api/suggestions/${encodeURIComponent(ticketId)}/decision`, {

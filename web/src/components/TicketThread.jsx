@@ -23,6 +23,8 @@ export default function TicketThread({ ticketId, role, onBack }) {
   const [replyError, setReplyError] = useState('');
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState('');
+  const [statusBusy, setStatusBusy] = useState(false);
+  const [statusError, setStatusError] = useState('');
   const listRef = useRef(null);
 
   const load = useCallback(
@@ -60,6 +62,27 @@ export default function TicketThread({ ticketId, role, onBack }) {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages.length, ticketId]);
+
+  // Agent-only status moves along the state machine (open → in_progress →
+  // closed). `answered` is not offered here: it comes from the decision panel.
+  async function changeStatus(next) {
+    setStatusBusy(true);
+    setStatusError('');
+    setNotice('');
+    try {
+      await api.updateStatus(ticketId, next);
+      setNotice(
+        next === 'in_progress'
+          ? 'تیکت در حال بررسی قرار گرفت.'
+          : 'تیکت بسته شد؛ مشتری دیگر نمی‌تواند در آن پاسخ دهد.'
+      );
+      await load({ silent: true });
+    } catch (err) {
+      setStatusError(err.message);
+    } finally {
+      setStatusBusy(false);
+    }
+  }
 
   async function sendReply(event) {
     event.preventDefault();
@@ -154,6 +177,48 @@ export default function TicketThread({ ticketId, role, onBack }) {
               })
             )}
           </div>
+
+          {role === 'agent' ? (
+            <div className="card status-actions" aria-labelledby="status-actions-title">
+              <h3 className="status-actions__title" id="status-actions-title">
+                وضعیت تیکت
+              </h3>
+              <p className="muted">
+                جابه‌جایی وضعیت فقط مطابق قواعد است: باز ← در حال بررسی ← پاسخ داده شد ← بسته.
+                پس از «پاسخ داده شد» فقط بستن مجاز است و تیکت بسته‌شده هرگز باز نمی‌شود.
+              </p>
+              <div className="status-actions__buttons">
+                {ticket.status === 'open' ? (
+                  <button
+                    type="button"
+                    className="btn btn--sm"
+                    disabled={statusBusy}
+                    onClick={() => changeStatus('in_progress')}
+                  >
+                    {statusBusy ? 'در حال ثبت…' : 'شروع بررسی'}
+                  </button>
+                ) : null}
+                {ticket.status === 'in_progress' || ticket.status === 'answered' ? (
+                  <button
+                    type="button"
+                    className="btn btn--danger btn--sm"
+                    disabled={statusBusy}
+                    onClick={() => changeStatus('closed')}
+                  >
+                    {statusBusy ? 'در حال ثبت…' : 'بستن تیکت'}
+                  </button>
+                ) : null}
+                {ticket.status === 'closed' ? (
+                  <p className="muted">این تیکت بسته شده است و وضعیت آن دیگر تغییر نمی‌کند.</p>
+                ) : null}
+              </div>
+              {statusError ? (
+                <p className="field-error" role="alert">
+                  {statusError}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
 
           {role === 'agent' ? (
             <p className="muted">

@@ -159,6 +159,27 @@ service). See `.env.example` for the full list.
 10. The customer sees the answer in the thread. Closed tickets are never
     reopened; a customer opens a new ticket instead.
 
+### Ticket statuses
+
+The schema allows four statuses — `open`, `in_progress`, `answered`, `closed` —
+and transitions follow one explicit state machine (`STATUS_TRANSITIONS` in
+`api/app/main.py`); anything else is a **409**, so an inconsistent status can
+never be written:
+
+- `open → in_progress` — the agent starts reviewing
+  (`PATCH /api/tickets/{id}/status`, agent only).
+- `open|in_progress → answered` — **only** by accepting or editing a
+  suggestion; the decision endpoint writes the status and the outbound message
+  together, so `answered` always means "a reply went out".
+- `in_progress|answered → closed` — the agent closes the ticket
+  (`PATCH /api/tickets/{id}/status`).
+- `closed` is terminal: no transition leaves it, accepting a suggestion on a
+  closed ticket is a 409, and a customer reply to a closed ticket is refused
+  (they open a new ticket instead).
+
+The `PATCH` endpoint deliberately has no `answered` target, so the "answered ⇒
+a message exists" invariant has exactly one writer.
+
 ---
 
 ## 6. Engine architecture
@@ -218,6 +239,9 @@ python -m venv .venv
 - `tests/test_suggestion_accept_reject.py` — accept creates the outbound
   message, reject only records the decision, a failed draft cannot be accepted
   (409), an edit without text is rejected (422).
+- `tests/test_ticket_status_transitions.py` — the status state machine: legal
+  moves succeed, illegal moves and anything out of `closed` are 409, a customer
+  can never change a status.
 
 The test suite is deliberately excluded from the runtime images (see
 `api/.dockerignore`) so they stay slim — run it on the host, as above.

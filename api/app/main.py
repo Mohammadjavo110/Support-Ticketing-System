@@ -2,7 +2,8 @@
 
 Writer ownership: this service owns users, sessions, tickets and messages, plus
 the initial ai_runs row created on ticket creation. It never writes
-ai_suggestions and only changes ticket.status inside the decision endpoint.
+ai_suggestions and only changes ticket.status through the status state machine
+(decision endpoint and PATCH /api/tickets/{id}/status).
 """
 
 import json
@@ -35,6 +36,17 @@ from app.security import (
 log = logging.getLogger("app.api")
 
 TRIAGE_QUEUE_KEY = "triage:queue"
+
+# The ticket status state machine (documented in README, "Ticket statuses").
+# `closed` is terminal — nothing ever leaves it; a customer opens a new ticket
+# instead. `answered` is reached only by accepting/editing a suggestion (the
+# decision endpoint), so it is not a target of the PATCH endpoint.
+STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
+    "open": frozenset({"in_progress", "answered"}),
+    "in_progress": frozenset({"answered", "closed"}),
+    "answered": frozenset({"closed"}),
+    "closed": frozenset(),
+}
 
 redis_client: Redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
 
@@ -262,6 +274,49 @@ async def add_message(
     return schemas.MessageOut.model_validate(message)
 
 
+@app.patch("/api/tickets/{ticket_id}/status", response_model=schemas.TicketOut)
+async def set_ticket_status(
+    ticket_id: uuid.UUID,
+    payload: schemas.StatusPatchIn,
+    user: User = Depends(current_user),
+    db: AsyncSession = Depends(get_session),
+) -> schemas.TicketOut:
+    """Move a ticket along the status state machine (agent only).
+
+    Allowed moves come from STATUS_TRANSITIONS: open -> in_progress (start
+    review), in_progress -> closed (reviewed, nothing to send). `answered` is
+    not a target here — it is written only by the decision endpoint, which
+    creates the outbound message together with the status. `closed` is
+    terminal: any move out of it is a 409.
+    """
+    require_agent(user)
+    ticket = await db.get(Ticket, ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    allowed = STATUS_TRANSITIONS.get(ticket.status, frozenset())
+    if payload.status not in allowed:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Invalid status transition {ticket.status!r} -> {payload.status!r}"
+                + (
+                    "; a closed ticket never reopens"
+                    if ticket.status == "closed"
+                    else f"; allowed: {', '.join(sorted(allowed)) or 'none'}"
+                )
+            ),
+        )
+
+    ticket.status = payload.status
+    await db.commit()
+    await db.refresh(ticket)
+    log.info(
+        "status transition ticket_id=%s status=%s", ticket.id, ticket.status
+    )
+    return schemas.TicketOut.model_validate(ticket)
+
+
 # ---------------------------------------------------------------------------
 # Agent workbench
 # ---------------------------------------------------------------------------
@@ -346,6 +401,17 @@ async def decide(
 
     message: Message | None = None
     if payload.decision in ("accepted", "edited"):
+        # Accept/edit moves the ticket to `answered`; that must be a legal
+        # transition (open/in_progress -> answered). Deciding on a closed or
+        # already-answered ticket is refused instead of silently rewriting it.
+        if "answered" not in STATUS_TRANSITIONS.get(ticket.status, frozenset()):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Ticket is {ticket.status!r}; accepting or editing a "
+                    "suggestion requires an open or in-progress ticket"
+                ),
+            )
         if payload.decision == "accepted" and (
             suggestion.draft_status == "failed" or not suggestion.draft_text
         ):

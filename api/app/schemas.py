@@ -112,6 +112,13 @@ class InboxItem(BaseModel):
     suggestion: Optional[SuggestionOut] = None
 
 
+class StatusPatchIn(BaseModel):
+    # `answered` is deliberately absent: it is written only by the decision
+    # endpoint, which creates the outbound message together with the status.
+    # This endpoint handles the agent-driven moves (start review, close).
+    status: Literal["in_progress", "closed"]
+
+
 class DecisionIn(BaseModel):
     decision: Literal["accepted", "edited", "rejected"]
     text: Optional[str] = Field(default=None, max_length=5000)
