@@ -109,6 +109,9 @@ class InboxItem(BaseModel):
     needs_manual_triage: bool
     created_at: datetime
     waiting_hours: float
+    # Who the ticket belongs to — the agent inbox shows it; the UI falls back
+    # to "نامعلوم" when it is missing.
+    customer_name: Optional[str] = None
     suggestion: Optional[SuggestionOut] = None
 
 

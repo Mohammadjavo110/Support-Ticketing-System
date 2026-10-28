@@ -328,27 +328,30 @@ async def inbox(
     db: AsyncSession = Depends(get_session),
 ) -> list[schemas.InboxItem]:
     require_agent(user)
-    tickets = (
-        await db.scalars(
-            select(Ticket).order_by(
-                Ticket.needs_manual_triage.desc(),
-                Ticket.priority.asc(),
-                Ticket.created_at.asc(),
-            )
+    rows = await db.execute(
+        select(Ticket, User.display_name, User.email)
+        .join(User, User.id == Ticket.customer_id)
+        .order_by(
+            Ticket.needs_manual_triage.desc(),
+            Ticket.priority.asc(),
+            Ticket.created_at.asc(),
         )
-    ).all()
+    )
+    # (ticket, customer display name, customer email) per row — the agent
+    # inbox shows who the ticket belongs to; no other customer data travels.
+    tickets = [(ticket, name, email) for ticket, name, email in rows]
 
     suggestions: dict = {}
     if tickets:
-        rows = await db.scalars(
+        suggestion_rows = await db.scalars(
             select(AiSuggestion).where(
-                AiSuggestion.ticket_id.in_([t.id for t in tickets])
+                AiSuggestion.ticket_id.in_([t.id for t, _, _ in tickets])
             )
         )
-        suggestions = {row.ticket_id: row for row in rows}
+        suggestions = {row.ticket_id: row for row in suggestion_rows}
 
     items = []
-    for ticket in tickets:
+    for ticket, customer_display, customer_email in tickets:
         suggestion = suggestions.get(ticket.id)
         items.append(
             schemas.InboxItem(
@@ -360,6 +363,7 @@ async def inbox(
                 needs_manual_triage=ticket.needs_manual_triage,
                 created_at=ticket.created_at,
                 waiting_hours=_waiting_hours(ticket.created_at),
+                customer_name=customer_display or customer_email,
                 suggestion=(
                     schemas.SuggestionOut.model_validate(suggestion)
                     if suggestion is not None
